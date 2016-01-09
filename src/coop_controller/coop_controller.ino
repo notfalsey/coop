@@ -1,4 +1,4 @@
-// pins assignments
+// pin assignments
 const int PHOTO_CELL_PIN = A0; 
 const int OVERRIDE_SWITCH_PIN = 2;
 const int OVERRIDE_DIR__PIN = 3;
