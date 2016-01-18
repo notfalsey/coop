@@ -1,5 +1,8 @@
+#include <Wire.h>
+
 // pin assignments
 const int PHOTO_CELL_PIN = A0; 
+const int TEMP_PIN = A1;
 const int OVERRIDE_SWITCH_PIN = 2;
 const int OVERRIDE_DIR__PIN = 3;
 const int BOTTOM_SWITCH_PIN = 4;    
@@ -14,13 +17,24 @@ const byte DARK = 0;
 const byte INCONSISTENT = 1;
 const byte LIGHT = 2;
 
+// I2C bus address
+#define SLAVE_ADDRESS 0x05
+
+// global variables
+bool remoteClose = false;
+bool remoteOpen = false;
+
+#define AREF_VOLTAGE 5.0
+
+
 // ************************************** the setup **************************************
 
 void setup(void) {
+  Serial.println("Coop Controller starting...");
+  
   Serial.begin(9600); // initialize serial port hardware
- 
-  // welcome message
-  Serial.println("Coop Controller started");
+
+  //analogReference(EXTERNAL);
   
   // coop door motor
   pinMode (ENABLE_MOTOR_PIN, OUTPUT);           // enable motor pin = output
@@ -44,6 +58,13 @@ void setup(void) {
   // top switch
   pinMode(TOP_SWITCH_PIN, INPUT);                     // set top switch pin as input
   digitalWrite(TOP_SWITCH_PIN, HIGH);                 // activate top switch resistor
+
+  Wire.begin(SLAVE_ADDRESS);
+
+  Wire.onReceive(onReceive);
+  Wire.onRequest(onRequest);
+
+  Serial.println("Coop Controller ready.");
 }
  
 // ************************************** functions **************************************
@@ -220,7 +241,12 @@ void doCoopDoor() {
     } else {
       closeCoopDoor();  
     }
+  } else if(remoteClose) {
+    closeCoopDoor();  
+  } else if(remoteOpen) {
+    openCoopDoor();   
   } else {
+    // act according to the light
     // if we just changed to non-override mode, then force an immediate photecell read
     boolean immediateReading = (overrideSwitchPinVal == 0) && (prevOverrideSwitchPinVal == 1);
     // act according to photo cell reading 
@@ -242,4 +268,153 @@ void doCoopDoor() {
  
 void loop() {
   doCoopDoor();
+}
+
+const int RESPONSE_SIZE = 2;
+byte response[RESPONSE_SIZE]; 
+
+void handleEchoCommand(int bytesToRead) {
+  if(bytesToRead > RESPONSE_SIZE) {
+    Serial.println("Error requested too many bytes");
+  } else {
+    for(int i = 0; i < bytesToRead; i++) {
+      response[i] = Wire.read();
+    }
+  }
+}
+
+void handleReadTempCommand() {
+  int reading = analogRead(TEMP_PIN);
+  float voltage = reading * AREF_VOLTAGE / 1024.0;
+  float celsius = (voltage - 0.48) * 100;
+  float fahrenheit = celsius * 1.8 + 32.0; 
+  Serial.print("Read ");
+  Serial.println(reading);
+  Serial.print("Volts: ");
+  Serial.print(voltage);
+  Serial.print(", Celsius: ");
+  Serial.print(celsius);
+  Serial.print(", Fahrenheit: ");
+  Serial.println(fahrenheit);
+  Serial.print("Sending ");
+  response[0] = reading / 256;
+  response[1] = reading % 256;
+  Serial.print(response[0]);
+  Serial.print(", ");
+  Serial.println(response[1]);
+}
+
+void handleReadLightCommand() {
+  int reading = analogRead(PHOTO_CELL_PIN);
+  Serial.print("Read ");
+  Serial.println(reading);
+  Serial.print("Sending ");
+  response[0] = reading / 256;
+  response[1] = reading % 256;
+  Serial.print(response[0]);
+  Serial.print(", ");
+  Serial.println(response[1]);
+}
+
+void handleReadDoorCommand() {
+  Serial.print("Sending ");
+  response[0] = 0;
+  int doorState = 0;
+  if(isDoorOpen()) {
+    response[1] = 0;
+  } else if(isDoorClosed()) {
+    response[1] = 2;
+  } else {
+    // in transition
+    response[1] = 1;
+  }
+  Serial.print(response[0]);
+  Serial.print(", ");
+  Serial.println(response[1]);
+}
+
+void handleCloseDoorCommand() {
+  remoteClose = true;
+  remoteOpen = false;
+}
+
+void handleOpenDoorCommand() {
+  remoteClose = false;
+  remoteOpen = true;
+}
+
+void handleAutoDoorCommand() {
+  remoteClose = false;
+  remoteOpen = false;
+}
+
+void handleCommand(int command, int bytesToRead) {
+    // commands
+    const int CMD_ECHO = 0;
+    const int CMD_RESET = 1;
+    const int CMD_READ_TEMP = 2;
+    const int CMD_READ_LIGHT = 3;
+    const int CMD_READ_DOOR = 4;
+    const int CMD_SHUT_DOOR = 5;
+    const int CMD_OPEN_DOOR = 6;
+    const int CMD_AUTO_DOOR = 7;
+
+    switch(command) {
+      case CMD_ECHO:
+         Serial.println("Received echo command");
+         handleEchoCommand(bytesToRead);
+         break;
+      case CMD_RESET:
+         Serial.println("Received reset command");
+         Serial.println("Reset not implemented");
+         break;
+      case CMD_READ_TEMP:
+         Serial.println("Received read temp command");
+         handleReadTempCommand();
+         break;
+      case CMD_READ_LIGHT:
+         Serial.println("Received read light command");
+         handleReadLightCommand();
+         break;
+      case CMD_READ_DOOR:
+         Serial.println("Received read door command");
+         handleReadDoorCommand();
+         break;  
+      case CMD_SHUT_DOOR:
+         Serial.println("Received close door command");
+         handleCloseDoorCommand();
+         break;  
+      case CMD_OPEN_DOOR:
+         Serial.println("Received open door command");
+         handleOpenDoorCommand();
+         break;
+      case CMD_AUTO_DOOR:
+         Serial.println("Received auto door command");
+         handleAutoDoorCommand();
+         break;
+      default: 
+        Serial.print("Unrecognized command: ");
+        Serial.println(command);
+    }
+    
+    while(Wire.available()) {
+      Serial.print("Clearing wire data: ");
+      Serial.println(Wire.read());
+    }
+}
+
+void onReceive(int byteCount) {
+  Serial.print("onReceive byteCount: ");
+  Serial.println(byteCount);
+  if(byteCount > 0 && Wire.available()) {
+    handleCommand(Wire.read(), byteCount-1);
+  }
+}
+
+void onRequest() {
+  Serial.print("onRequest: sending ");
+  Serial.print(response[0]);
+  Serial.print(", ");
+  Serial.println(response[1]);
+  Wire.write(response, RESPONSE_SIZE);
 }
