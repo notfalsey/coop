@@ -31,11 +31,8 @@ bool resetRequested = false;
 // ************************************** the setup **************************************
 
 void setup(void) {
-  Serial.println("Coop Controller starting...");
-  
   Serial.begin(9600); // initialize serial port hardware
-
-  //analogReference(EXTERNAL);
+  Serial.println("Coop Controller starting...");
   
   // coop door motor
   pinMode (ENABLE_MOTOR_PIN, OUTPUT);           // enable motor pin = output
@@ -60,22 +57,30 @@ void setup(void) {
   pinMode(TOP_SWITCH_PIN, INPUT);                     // set top switch pin as input
   digitalWrite(TOP_SWITCH_PIN, HIGH);                 // activate top switch resistor
 
-  setupWatchdog();
-
+  Serial.println("Joining i2c bus...");
   Wire.begin(SLAVE_ADDRESS);
 
   Wire.onReceive(onReceive);
   Wire.onRequest(onRequest);
 
+  Serial.println("i2c ready.");
+
+  setupWatchdog();
+
   Serial.println("Coop Controller ready.");
 }
 
-// ******** watchdog time setup **********
+// ******** watchdog timer setup **********
 void setupWatchdog(void) {
+  Serial.println("Setting up watchdog timer ...");
   cli();
   wdt_reset();
-  WDTCSR  = (0<<WDIE)|(1<<WDE)|(0<<WDP3)|(1<<WDP2)|(1<<WDP1)|(0<<WDP0);
+  // Enter Watchdog Configuration mode:
+  WDTCSR |= (1<<WDCE) | (1<<WDE);
+  // Configure watchdog:
+  WDTCSR  = (0<<WDIE)|(1<<WDE)|(1<<WDP3)|(0<<WDP2)|(0<<WDP1)|(1<<WDP0);
   sei();
+  Serial.println("Watchdog timer set.");
 }
  
 // ************************************** functions **************************************
@@ -202,7 +207,7 @@ void closeCoopDoor() {
   // but only if the controller has not just started otherwise 
   // the motor will run in the down direction at start up 
   // after it is already down and locked
-  if (doorIsClosed && (currentTime - timeClosed) > RUN_AFTER_DOWN && (currentTime > (RUN_AFTER_DOWN + 1000))) {
+  if (doorIsClosed && (currentTime - timeClosed) > RUN_AFTER_DOWN || (currentTime < (RUN_AFTER_DOWN + 1000))) {
     stopCoopDoorMotor();
     if(!doorWasClosed) { // we just now closed it
         Serial.println("Coop Door Closed");
@@ -287,11 +292,28 @@ void loop() {
   // reset the watchdog timer unless we have received a command to reset the device
   if(!resetRequested) {
     wdt_reset();  
+  } else {
+    Serial.println("Resetting....");
   }
 }
 
-const int RESPONSE_SIZE = 2;
+const int RESPONSE_SIZE = 4;
 byte response[RESPONSE_SIZE]; 
+
+void setResponse(unsigned long number) {
+  Serial.print("Sending ");
+  response[0] = number >> 24;
+  Serial.print(response[0]);
+  Serial.print(",");
+  response[1] = (number >> 16) & 0x000000FF;
+  Serial.print(response[1]);
+  Serial.print(",");
+  response[2] = (number >> 8) & 0x000000FF;
+  Serial.print(response[2]);
+  Serial.print(",");
+  response[3] = number & 0x000000FF;
+  Serial.println(response[3]);
+}
 
 void handleEchoCommand(int bytesToRead) {
   if(bytesToRead > RESPONSE_SIZE) {
@@ -301,6 +323,10 @@ void handleEchoCommand(int bytesToRead) {
       response[i] = Wire.read();
     }
   }
+}
+
+void handleResetCommand() {
+  resetRequested = true;
 }
 
 void handleReadTempCommand() {
@@ -316,56 +342,48 @@ void handleReadTempCommand() {
   Serial.print(celsius);
   Serial.print(", Fahrenheit: ");
   Serial.println(fahrenheit);
-  Serial.print("Sending ");
-  response[0] = reading / 256;
-  response[1] = reading % 256;
-  Serial.print(response[0]);
-  Serial.print(", ");
-  Serial.println(response[1]);
+  setResponse(reading);
 }
 
 void handleReadLightCommand() {
   int reading = analogRead(PHOTO_CELL_PIN);
   Serial.print("Read ");
   Serial.println(reading);
-  Serial.print("Sending ");
-  response[0] = reading / 256;
-  response[1] = reading % 256;
-  Serial.print(response[0]);
-  Serial.print(", ");
-  Serial.println(response[1]);
+  setResponse(reading);
 }
 
 void handleReadDoorCommand() {
   Serial.print("Sending ");
-  response[0] = 0;
-  int doorState = 0;
+  // initialize to "in transition" or unknown
+  int doorState = 1;
   if(isDoorOpen()) {
-    response[1] = 0;
+    doorState = 0;
   } else if(isDoorClosed()) {
-    response[1] = 2;
-  } else {
-    // in transition
-    response[1] = 1;
+    doorState = 2;
   }
-  Serial.print(response[0]);
-  Serial.print(", ");
-  Serial.println(response[1]);
+  setResponse(doorState);
 }
 
 void handleCloseDoorCommand() {
   remoteClose = true;
   remoteOpen = false;
+  setResponse(0);
 }
 
 void handleOpenDoorCommand() {
   remoteClose = false;
   remoteOpen = true;
+  setResponse(0);
 }
 
 void handleAutoDoorCommand() {
   remoteClose = false;
   remoteOpen = false;
+  setResponse(0);
+}
+
+void handleUptimeCommand() {
+  setResponse(millis());
 }
 
 void handleCommand(int command, int bytesToRead) {
@@ -378,6 +396,7 @@ void handleCommand(int command, int bytesToRead) {
     const int CMD_SHUT_DOOR = 5;
     const int CMD_OPEN_DOOR = 6;
     const int CMD_AUTO_DOOR = 7;
+    const int CMD_UPTIME = 8;
 
     switch(command) {
       case CMD_ECHO:
@@ -386,8 +405,7 @@ void handleCommand(int command, int bytesToRead) {
          break;
       case CMD_RESET:
          Serial.println("Received reset command");
-         Serial.println("Reset not implemented");
-         resetRequested = true;
+         handleResetCommand();
          break;
       case CMD_READ_TEMP:
          Serial.println("Received read temp command");
@@ -413,6 +431,10 @@ void handleCommand(int command, int bytesToRead) {
          Serial.println("Received auto door command");
          handleAutoDoorCommand();
          break;
+      case CMD_UPTIME:
+         Serial.println("Received uptime command");
+         handleUptimeCommand();
+         break;
       default: 
         Serial.print("Unrecognized command: ");
         Serial.println(command);
@@ -436,6 +458,10 @@ void onRequest() {
   Serial.print("onRequest: sending ");
   Serial.print(response[0]);
   Serial.print(", ");
-  Serial.println(response[1]);
+  Serial.print(response[1]);
+  Serial.print(", ");
+  Serial.print(response[2]);
+  Serial.print(", ");
+  Serial.println(response[3]);
   Wire.write(response, RESPONSE_SIZE);
 }
