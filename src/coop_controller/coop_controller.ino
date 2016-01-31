@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <avr/wdt.h>
 
 // pin assignments
 const int PHOTO_CELL_PIN = A0; 
@@ -23,9 +24,9 @@ const byte LIGHT = 2;
 // global variables
 bool remoteClose = false;
 bool remoteOpen = false;
+bool resetRequested = false;
 
 #define AREF_VOLTAGE 5.0
-
 
 // ************************************** the setup **************************************
 
@@ -59,12 +60,22 @@ void setup(void) {
   pinMode(TOP_SWITCH_PIN, INPUT);                     // set top switch pin as input
   digitalWrite(TOP_SWITCH_PIN, HIGH);                 // activate top switch resistor
 
+  setupWatchdog();
+
   Wire.begin(SLAVE_ADDRESS);
 
   Wire.onReceive(onReceive);
   Wire.onRequest(onRequest);
 
   Serial.println("Coop Controller ready.");
+}
+
+// ******** watchdog time setup **********
+void setupWatchdog(void) {
+  cli();
+  wdt_reset();
+  WDTCSR  = (0<<WDIE)|(1<<WDE)|(0<<WDP3)|(1<<WDP2)|(1<<WDP1)|(0<<WDP0);
+  sei();
 }
  
 // ************************************** functions **************************************
@@ -186,8 +197,12 @@ void closeCoopDoor() {
     digitalWrite (OPEN_MOTOR_PIN, LOW);       // turn off motor open direction
     digitalWrite (ENABLE_MOTOR_PIN, HIGH);    // enable motor
   }
-  // if bottom reed switch is closed for enough time to let slack out of rope
-  if (doorIsClosed && (currentTime - timeClosed) > RUN_AFTER_DOWN) {
+  // if bottom reed switch is closed for enough time 
+  // to let slack out of rope and allow levers to lock
+  // but only if the controller has not just started otherwise 
+  // the motor will run in the down direction at start up 
+  // after it is already down and locked
+  if (doorIsClosed && (currentTime - timeClosed) > RUN_AFTER_DOWN && (currentTime > (RUN_AFTER_DOWN + 1000))) {
     stopCoopDoorMotor();
     if(!doorWasClosed) { // we just now closed it
         Serial.println("Coop Door Closed");
@@ -204,12 +219,13 @@ void openCoopDoor() {
   boolean doorIsOpen = isDoorOpen();
   
   if(!doorIsOpen) {
+    Serial.println("door is not open");
     doorWasOpen = false;
     digitalWrite(CLOSE_MOTOR_PIN, LOW);       // turn off motor close direction
     digitalWrite(OPEN_MOTOR_PIN, HIGH);       // turn on motor open direction
     digitalWrite(ENABLE_MOTOR_PIN, HIGH);              // enable motor
   }
-  if (doorIsOpen) {                           // if top reed switch is closed
+  if (doorIsOpen) {                    // if top reed switch is closed
     stopCoopDoorMotor();
     if (!doorWasOpen) {
       Serial.println("Coop Door open");
@@ -268,6 +284,10 @@ void doCoopDoor() {
  
 void loop() {
   doCoopDoor();
+  // reset the watchdog timer unless we have received a command to reset the device
+  if(!resetRequested) {
+    wdt_reset();  
+  }
 }
 
 const int RESPONSE_SIZE = 2;
@@ -367,6 +387,7 @@ void handleCommand(int command, int bytesToRead) {
       case CMD_RESET:
          Serial.println("Received reset command");
          Serial.println("Reset not implemented");
+         resetRequested = true;
          break;
       case CMD_READ_TEMP:
          Serial.println("Received read temp command");
