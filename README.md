@@ -8,3 +8,6 @@ Modifications made to the Dave Naves sketch were:
 * Change door action to wait until getting consecutive light readings over a period of 5 minutes to reduce chances of light flicker (head lights, flash lights etc) causing the door to open
 * Improved closing to run slack out of rope to allow levers to lock
 * Added watchdog timer to reset if hung
+
+
+![Alt text](/src/coop_controller/coop_controller_schematic.jpg?raw=true "Coop Controller Schematic")
