@@ -26,6 +26,9 @@ bool remoteClose = false;
 bool remoteOpen = false;
 bool resetRequested = false;
 
+const int RESPONSE_SIZE = 4;
+byte response[RESPONSE_SIZE]; 
+
 #define AREF_VOLTAGE 5.0
 
 // ************************************** the setup **************************************
@@ -292,12 +295,9 @@ void loop() {
   if(!resetRequested) {
     wdt_reset();  
   } else {
-    Serial.println("Resetting....");
+    Serial.println("Resetting...");
   }
 }
-
-const int RESPONSE_SIZE = 4;
-byte response[RESPONSE_SIZE]; 
 
 void setResponse(unsigned long number) {
   Serial.print("Sending ");
@@ -388,17 +388,17 @@ void handleUptimeCommand() {
   setResponse(millis());
 }
 
-void handleCommand(int command, int bytesToRead) {
+void handleCommand(byte command, int bytesToRead) {
     // commands
-    const int CMD_ECHO = 0;
-    const int CMD_RESET = 1;
-    const int CMD_READ_TEMP = 2;
-    const int CMD_READ_LIGHT = 3;
-    const int CMD_READ_DOOR = 4;
-    const int CMD_SHUT_DOOR = 5;
-    const int CMD_OPEN_DOOR = 6;
-    const int CMD_AUTO_DOOR = 7;
-    const int CMD_UPTIME = 8;
+    const byte CMD_ECHO = 0;
+    const byte CMD_RESET = 1;
+    const byte CMD_READ_TEMP = 2;
+    const byte CMD_READ_LIGHT = 3;
+    const byte CMD_READ_DOOR = 4;
+    const byte CMD_SHUT_DOOR = 5;
+    const byte CMD_OPEN_DOOR = 6;
+    const byte CMD_AUTO_DOOR = 7;
+    const byte CMD_UPTIME = 8;
 
     switch(command) {
       case CMD_ECHO:
