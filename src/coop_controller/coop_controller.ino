@@ -224,7 +224,6 @@ void openCoopDoor() {
   boolean doorIsOpen = isDoorOpen();
   
   if(!doorIsOpen) {
-    Serial.println("door is not open");
     doorWasOpen = false;
     digitalWrite(CLOSE_MOTOR_PIN, LOW);       // turn off motor close direction
     digitalWrite(OPEN_MOTOR_PIN, HIGH);       // turn on motor open direction
@@ -326,11 +325,14 @@ void handleEchoCommand(int bytesToRead) {
 }
 
 void handleResetCommand() {
+  // send response first before we reset
+  setResponse(0);
+  delay(1000);
   resetRequested = true;
 }
 
 void handleReadTempCommand() {
-  int reading = analogRead(TEMP_PIN);
+  unsigned long reading = analogRead(TEMP_PIN);
   float voltage = reading * AREF_VOLTAGE / 1024.0;
   float celsius = (voltage - 0.48) * 100;
   float fahrenheit = celsius * 1.8 + 32.0; 
@@ -346,7 +348,7 @@ void handleReadTempCommand() {
 }
 
 void handleReadLightCommand() {
-  int reading = analogRead(PHOTO_CELL_PIN);
+  unsigned long reading = analogRead(PHOTO_CELL_PIN);
   Serial.print("Read ");
   Serial.println(reading);
   setResponse(reading);
@@ -355,7 +357,7 @@ void handleReadLightCommand() {
 void handleReadDoorCommand() {
   Serial.print("Sending ");
   // initialize to "in transition" or unknown
-  int doorState = 1;
+  unsigned long doorState = 1;
   if(isDoorOpen()) {
     doorState = 0;
   } else if(isDoorClosed()) {
