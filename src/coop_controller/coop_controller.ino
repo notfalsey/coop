@@ -1,7 +1,7 @@
 #include <Wire.h>
 #include <avr/wdt.h>
 
-//#define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
  #define DEBUG_PRINTLN(x) Serial.println(x)
@@ -15,7 +15,7 @@
 const int PHOTO_CELL_PIN = A0; 
 const int TEMP_PIN = A1;
 const int OVERRIDE_SWITCH_PIN = 2;
-const int OVERRIDE_DIR__PIN = 3;
+const int OVERRIDE_DIR_PIN = 3;
 const int BOTTOM_SWITCH_PIN = 4;    
 const int TOP_SWITCH_PIN = 5;       
 const int ENABLE_MOTOR_PIN = 6;     
@@ -27,7 +27,7 @@ const int CLOSED_LED_PIN = 9;
 #define SLAVE_ADDRESS 0x05
 
 // command constants
-const unsigned long COMMAND_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const unsigned long COMMAND_TIMEOUT = 60 * 1000; // 1 minute
 const byte CMD_ECHO = 0;
 const byte CMD_RESET = 1;
 const byte CMD_READ_TEMP = 2;
@@ -37,6 +37,7 @@ const byte CMD_SHUT_DOOR = 5;
 const byte CMD_OPEN_DOOR = 6;
 const byte CMD_AUTO_DOOR = 7;
 const byte CMD_UPTIME = 8;
+const byte CMD_READ_MODE = 9;
 
 // global variables
 bool remoteClose = false;
@@ -47,6 +48,7 @@ const int RESPONSE_SIZE = 4;
 byte response[RESPONSE_SIZE]; 
 
 unsigned long lastCommandTime = millis();
+unsigned long DEBOUNCE_DELAY = 100;
 
 #define AREF_VOLTAGE 5.0
 
@@ -57,27 +59,28 @@ void setup(void) {
   DEBUG_PRINTLN("Coop Controller starting...");
   
   // coop door motor
-  pinMode (ENABLE_MOTOR_PIN, OUTPUT);           // enable motor pin = output
+  pinMode (ENABLE_MOTOR_PIN, OUTPUT);  // enable motor pin = output
   pinMode (CLOSE_MOTOR_PIN, OUTPUT);   // motor close direction pin = output
   pinMode (OPEN_MOTOR_PIN, OUTPUT);    // motor open direction pin = output
+  stopCoopDoorMotor();
  
   // coop door leds
-  pinMode (CLOSED_LED_PIN, OUTPUT);              // enable coopDoorClosedLed = output
+  pinMode (CLOSED_LED_PIN, OUTPUT);        // enable coopDoorClosedLed = output
   digitalWrite(CLOSED_LED_PIN, LOW);
  
   // coop door override switches
   pinMode (OVERRIDE_SWITCH_PIN, INPUT);
   digitalWrite(OVERRIDE_SWITCH_PIN, LOW);
-  pinMode (OVERRIDE_DIR__PIN, INPUT);
-  digitalWrite(OVERRIDE_DIR__PIN, HIGH);
+  pinMode (OVERRIDE_DIR_PIN, INPUT);
+  digitalWrite(OVERRIDE_DIR_PIN, HIGH);
  
   // bottom switch
-  pinMode(BOTTOM_SWITCH_PIN, INPUT);                  // set bottom switch pin as input
-  digitalWrite(BOTTOM_SWITCH_PIN, HIGH);              // activate bottom switch resistor
+  pinMode(BOTTOM_SWITCH_PIN, INPUT);       // set bottom switch pin as input
+  digitalWrite(BOTTOM_SWITCH_PIN, HIGH);   // activate bottom switch resistor
  
   // top switch
-  pinMode(TOP_SWITCH_PIN, INPUT);                     // set top switch pin as input
-  digitalWrite(TOP_SWITCH_PIN, HIGH);                 // activate top switch resistor
+  pinMode(TOP_SWITCH_PIN, INPUT);          // set top switch pin as input
+  digitalWrite(TOP_SWITCH_PIN, HIGH);      // activate top switch resistor
 
   DEBUG_PRINTLN("Joining i2c bus...");
   Wire.begin(SLAVE_ADDRESS);
@@ -106,43 +109,55 @@ void setupWatchdog(void) {
 }
  
 // ************************************** functions **************************************
- 
-int getSwitchState(unsigned long lastDebounceTime, int prevState, int pin) {
-  const unsigned long DEBOUNCE_DELAY = 100;
-  unsigned long currentTime = millis();
-  int switchState = prevState;
- 
-  if ((currentTime - lastDebounceTime) > DEBOUNCE_DELAY) {     // delay for consistent readings
-    lastDebounceTime = currentTime;
-    int pinVal = digitalRead(pin);       // read input value and store it in val
-    int pinVal2 = digitalRead(pin);      // read input value again to check or bounce
- 
-    if (pinVal == pinVal2) {             // make sure we have 2 consistant readings
-      if (pinVal != prevState) {         // the switch state has changed!
-        switchState = pinVal;
-        
-        Serial.print ("Pin Value changed to: ");  
-        DEBUG_PRINTLN(switchState);         
-        if(switchState == 0) {
-          DEBUG_PRINTLN("switch is closed.");
-        }
+int isDoorOpen() {
+  static int switchState = digitalRead(TOP_SWITCH_PIN);
+  static unsigned long lastDebounceTime = millis();
+  int reading = digitalRead(TOP_SWITCH_PIN);
+  static int lastReading = reading;
+
+  if(reading != lastReading) {
+    DEBUG_PRINTLN("Diff reading");
+    lastDebounceTime = millis();    
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) { 
+    if(reading != switchState) {
+      switchState = reading;
+      if(switchState == 0) {
+        DEBUG_PRINTLN("Top switch CLOSED");
+      } else {
+        DEBUG_PRINTLN("Top switch OPENED");
       }
     }
   }
-  return switchState;
-}
-
-int isDoorOpen() {
-  static int switchState = -1;
-  static unsigned long lastDebounceTime = 0;
-  switchState = getSwitchState(lastDebounceTime, switchState, TOP_SWITCH_PIN);
+  
+  lastReading = reading;
   return switchState == 0;
 }
 
 int isDoorClosed() {
-  static int switchState = -1;
-  static unsigned long lastDebounceTime = 0;
-  switchState = getSwitchState(lastDebounceTime, switchState, BOTTOM_SWITCH_PIN);
+  static int switchState = digitalRead(BOTTOM_SWITCH_PIN);
+  static unsigned long lastDebounceTime = millis();
+  int reading = digitalRead(BOTTOM_SWITCH_PIN);
+  static int lastReading = reading;
+
+  if(reading != lastReading) {
+    DEBUG_PRINTLN("Diff reading");
+    lastDebounceTime = millis();    
+  }
+
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) { 
+    if(reading != switchState) {
+      switchState = reading;
+      if(switchState == 0) {
+        DEBUG_PRINTLN("Bottom switch CLOSED");
+      } else {
+        DEBUG_PRINTLN("Bottom switch OPENED");
+      }
+    }
+  }
+  
+  lastReading = reading;
   return switchState == 0;
 }
  
@@ -180,9 +195,11 @@ void closeCoopDoor() {
   // but only if the controller has not just started otherwise 
   // the motor will run in the down direction at start up 
   // after it is already down and locked
-  if (doorIsClosed && (currentTime - timeClosed) > RUN_AFTER_DOWN || (currentTime < (RUN_AFTER_DOWN + 1000))) {
+  boolean justStarted = currentTime < (RUN_AFTER_DOWN + 1000);
+  boolean hasAllowedSlack = (currentTime - timeClosed) > RUN_AFTER_DOWN;
+  if (doorIsClosed && (hasAllowedSlack || justStarted)) {
     stopCoopDoorMotor();
-    if(!doorWasClosed) { // we just now closed it
+    if(!doorWasClosed && !justStarted) { // we just now closed it
         DEBUG_PRINTLN("Coop Door Closed");
         DEBUG_PRINT("Time since closed: ");
         DEBUG_PRINTLN(currentTime - timeClosed);
@@ -198,9 +215,10 @@ void openCoopDoor() {
   
   if(!doorIsOpen) {
     doorWasOpen = false;
+    //DEBUG_PRINTLN("Activating motor in open direction");
     digitalWrite(CLOSE_MOTOR_PIN, LOW);       // turn off motor close direction
     digitalWrite(OPEN_MOTOR_PIN, HIGH);       // turn on motor open direction
-    digitalWrite(ENABLE_MOTOR_PIN, HIGH);              // enable motor
+    digitalWrite(ENABLE_MOTOR_PIN, HIGH);     // enable motor
   }
   if (doorIsOpen) {                    // if top reed switch is closed
     stopCoopDoorMotor();
@@ -209,34 +227,50 @@ void openCoopDoor() {
     }
   }
 }
+
+// true if in override mode; false otherwise
+boolean isOverrideMode() {
+  static boolean lastValue = false;
+  boolean newValue = digitalRead(OVERRIDE_SWITCH_PIN) == 1;
+  if(lastValue != newValue) {
+    if(newValue == true) {
+      DEBUG_PRINTLN("Override mode changed to ON");  
+    } else {
+      DEBUG_PRINTLN("Override mode changed to OFF");  
+    }
+  }
+  lastValue = newValue;
+  return newValue;
+}
+
+// true if override toggle switch is down; false otherwise
+boolean isOverrideDirToggleUp() {
+  static boolean lastValue = false;
+  boolean newValue = digitalRead(OVERRIDE_DIR_PIN) == 1;
+  if(lastValue != newValue) {
+    if(newValue == true) {
+      DEBUG_PRINTLN("Override toggle direction changed to UP");  
+    } else {
+      DEBUG_PRINTLN("Override toggle direction changed to DOWN");  
+    }
+  }
+  lastValue = newValue;
+  return newValue;
+}
  
 // do the coop door
 void doCoopDoor() {
-  static int overrideSwitchPinVal = 0;
-  static int overrideDirSwitchPinVal = 0;
-  int prevOverrideSwitchPinVal = overrideSwitchPinVal;
-  int prevOverrideDirSwitchPinVal = overrideDirSwitchPinVal;
-
-  overrideSwitchPinVal = digitalRead(OVERRIDE_SWITCH_PIN);
-  if(overrideSwitchPinVal == 1) {
-    overrideDirSwitchPinVal = digitalRead(OVERRIDE_DIR__PIN);
-    if(prevOverrideSwitchPinVal != overrideSwitchPinVal) {
-      DEBUG_PRINT("Override switch value changed. override=");    
-      DEBUG_PRINTLN(overrideSwitchPinVal);
-      if (prevOverrideDirSwitchPinVal != overrideDirSwitchPinVal) {
-        DEBUG_PRINT("Override switch direction changed. direction=");
-        DEBUG_PRINTLN(overrideDirSwitchPinVal);
-      }
-      
-    }
-    if(overrideDirSwitchPinVal == 1) {
+  static int overrideDirUp = isOverrideDirToggleUp();
+  
+  if(isOverrideMode()) {
+    if(isOverrideDirToggleUp()) {
       openCoopDoor();   
     } else {
       closeCoopDoor();  
     }
   } else if(remoteOpen) {
     openCoopDoor();  
-  } else {
+  } else if(remoteClose) {
     closeCoopDoor();   
   }
   if(isDoorClosed()) {
@@ -250,13 +284,6 @@ void doCoopDoor() {
  
 void loop() {
   doCoopDoor();
-  // reset the watchdog timer unless we have received a command to reset the device
-  // ot we have not received any command within the command timeout period
-  if(!resetRequested && (millis() - lastCommandTime) < COMMAND_TIMEOUT) {
-    wdt_reset();  
-  } else {
-    DEBUG_PRINTLN("Resetting...");
-  }
 }
 
 void setResponse(unsigned long number) {
@@ -315,7 +342,6 @@ void handleReadLightCommand() {
 }
 
 void handleReadDoorCommand() {
-  DEBUG_PRINT("Sending ");
   // initialize to "in transition" or unknown
   unsigned long doorState = 1;
   if(isDoorOpen()) {
@@ -324,6 +350,10 @@ void handleReadDoorCommand() {
     doorState = 2;
   }
   setResponse(doorState);
+}
+
+void handleReadModeCommand() {
+  setResponse(isOverrideMode());
 }
 
 void handleCloseDoorCommand() {
@@ -388,6 +418,10 @@ void handleCommand(byte command, int bytesToRead) {
          DEBUG_PRINTLN("Received uptime command");
          handleUptimeCommand();
          break;
+      case CMD_READ_MODE:
+         DEBUG_PRINTLN("Received read mode command");
+         handleReadModeCommand();
+         break;  
       default: 
         DEBUG_PRINT("Unrecognized command: ");
         DEBUG_PRINTLN(command);
@@ -396,6 +430,11 @@ void handleCommand(byte command, int bytesToRead) {
     while(Wire.available()) {
       DEBUG_PRINT("Clearing wire data: ");
       DEBUG_PRINTLN(Wire.read());
+    }
+    
+    // we were healthy enough to process an entire command, so reset the watchdog
+    if(!resetRequested) {
+      wdt_reset(); 
     }
 }
 
