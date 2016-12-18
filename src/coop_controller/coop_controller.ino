@@ -171,7 +171,7 @@ void stopCoopDoorMotor() {
  
 // close the coop door motor (motor dir close = clockwise)
 void closeCoopDoor() {
-  const unsigned long RUN_AFTER_DOWN = 4000; 
+  const unsigned long RUN_AFTER_DOWN = 6000; 
   static boolean prevDoorClosed = false;
   static unsigned long timeClosed = 0;
   boolean doorWasClosed = true;
@@ -342,12 +342,15 @@ void handleReadLightCommand() {
 }
 
 void handleReadDoorCommand() {
-  // initialize to "in transition" or unknown
-  unsigned long doorState = 1;
+  // use numbers for door state that are unlikely to be transmitted incorrectly (e.g. 0)
+  // each state has a single bit set and the possible bit positions are spread out 
+  // Three possible states open: 1, transitioning: 8, closed: 64
+  // initialize to "in transition"
+  unsigned long doorState = 8;
   if(isDoorOpen()) {
-    doorState = 0;
+    doorState = 1;
   } else if(isDoorClosed()) {
-    doorState = 2;
+    doorState = 64;
   }
   setResponse(doorState);
 }
